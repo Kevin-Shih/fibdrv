@@ -5,8 +5,12 @@
 #include <linux/kdev_t.h>
 #include <linux/kernel.h>
 #include <linux/ktime.h>
+#include <linux/list.h>
+#include <linux/mm.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
+#include <linux/slab.h>
+#include <linux/string.h>
 
 MODULE_LICENSE("Dual MIT/GPL");
 MODULE_AUTHOR("National Cheng Kung University, Taiwan");
@@ -18,13 +22,121 @@ MODULE_VERSION("0.1");
 /* MAX_LENGTH is set to 92 because
  * ssize_t can't fit the number > 92
  */
-#define MAX_LENGTH 92
+#define MAX_LENGTH 100
 
 static dev_t fib_dev = 0;
 static struct cdev *fib_cdev;
 static struct class *fib_class;
 static DEFINE_MUTEX(fib_mutex);
 
+static int nodecount = 0;
+
+typedef struct bigN {
+    uint64_t val;
+    struct list_head link;
+} bigN;
+
+static void new_bignode(struct list_head *list_head, uint64_t val)
+{
+    bigN *newnode = (bigN *) kmalloc(sizeof(bigN), GFP_KERNEL);
+    if (!newnode)
+        return;
+    newnode->val = val;
+    list_add_tail(&newnode->link, list_head);
+    nodecount++;
+}
+
+#define MAX_64 1000000000000000000UL  // 10^18
+static int add_64(uint64_t a, uint64_t *b, int carrybit)
+{
+    if (a + *b + carrybit >= MAX_64) {
+        *b = a + *b + carrybit - MAX_64;
+        return 1;
+    }
+    *b += a + carrybit;
+    return 0;
+}
+
+static struct list_head *bigN_add(struct list_head *bigN1,
+                                  struct list_head *bigN2)
+{
+    struct list_head **n1 = &bigN1->next, **n2 = &bigN2->next;
+    for (int carrybit = 0;; n1 = &(*n1)->next, n2 = &(*n2)->next) {
+        if (*n2 == bigN2) {
+            if (*n1 == bigN1) {
+                if (carrybit)
+                    new_bignode(bigN2, 1);
+                break;
+            }
+            new_bignode(bigN2, 0);
+        }
+        carrybit = add_64(list_entry(*n1, bigN, link)->val,
+                          &list_entry(*n2, bigN, link)->val, carrybit);
+    }
+    return bigN2;
+}
+
+static void freebigN(struct list_head *list_head)
+{
+    struct list_head *pos, *safe;
+    list_for_each_safe (pos, safe, list_head) {
+        kfree(list_entry(pos, bigN, link));
+    }
+    kfree(list_head);
+}
+
+static char *bigN2string(struct list_head *list_head)
+{
+    int fklen = (nodecount & 1ull) + (nodecount >> 1);
+    char *result = (char *) kzalloc(fklen * 18 + 1, GFP_KERNEL);
+    if (!result)
+        return NULL;
+
+    struct list_head *pos;
+    list_for_each_prev(pos, list_head)
+    {
+        if (strlen(result) == 0)
+            snprintf(result, 19, "%lld", list_entry(pos, bigN, link)->val);
+        else
+            snprintf(result + strlen(result), 19, "%018lld",
+                     list_entry(pos, bigN, link)->val);
+    }
+    return result;
+}
+
+// v2 for bigN
+static long long fib_sequence_bignum(long long k, char *buf)
+{
+    if (k < 2) {
+        char result[2];
+        snprintf(result, 2, "%lld", k);
+        long long n = copy_to_user(buf, result, 2);
+        return n;
+    }
+
+    struct list_head *fk1 = (struct list_head *) kmalloc(
+                         sizeof(struct list_head), GFP_KERNEL),
+                     *fk2 = (struct list_head *) kmalloc(
+                         sizeof(struct list_head), GFP_KERNEL),
+                     *temp;
+    INIT_LIST_HEAD(fk1);
+    INIT_LIST_HEAD(fk2);
+    new_bignode(fk1, 1);
+    new_bignode(fk2, 0);
+    for (int i = 2; i <= k; i++) {
+        temp = bigN_add(fk1, fk2);
+        fk2 = fk1;
+        fk1 = temp;
+    }
+    char *result = bigN2string(fk1);
+    long long n = copy_to_user(buf, result, strlen(result));
+    kfree(result);
+    freebigN(fk1);
+    freebigN(fk2);
+    return n;
+}
+
+// v1
 static long long fib_sequence(long long k)
 {
     if (k < 2)
@@ -61,23 +173,35 @@ static ssize_t fib_read(struct file *file,
                         size_t size,
                         loff_t *offset)
 {
-    return (ssize_t) fib_sequence(*offset);
+    return (ssize_t) fib_sequence_bignum(*offset, buf);
 }
 
-
-/* write operation is skipped */
+static ktime_t kt;
+/* write operation is used as time measure function
+ * @size : choose fib mode
+ * buffer size set as 1024B
+ */
 static ssize_t fib_write(struct file *file,
                          const char *buf,
                          size_t size,
                          loff_t *offset)
 {
-    if (size == 1) {
-        ktime_t kt = ktime_get();
+    switch (size) {
+    case 0:  // defalut (time measure)
+        kt = ktime_get();
         fib_sequence(*offset);
         kt = ktime_sub(ktime_get(), kt);
         return (ssize_t) ktime_to_ns(kt);
+    case 1:  // bignum (time measure)
+        kt = ktime_get();
+        fib_sequence_bignum(*offset, NULL);
+        kt = ktime_sub(ktime_get(), kt);
+        return (ssize_t) ktime_to_ns(kt);
+    case 2:   // fast doubling (time measure)
+    case 3:   // fast doubling bignunm (time measure)
+    default:  // make check
+        return 1;
     }
-    return 1;
 }
 
 static loff_t fib_device_lseek(struct file *file, loff_t offset, int orig)

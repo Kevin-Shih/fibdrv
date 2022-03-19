@@ -7,13 +7,14 @@
 #include <unistd.h>
 
 #define FIB_DEV "/dev/fibonacci"
+#define BUF_SIZE 1024
 
 int main(int argc, char *argv[])
 {
     long long sz;
 
-    char buf[1];
-    char write_buf[] = "testing writing";
+    char *buf = calloc(BUF_SIZE, 1);
+    char write_buf[] = "testing writing00";
     int offset = 100; /* TODO: try test something bigger than the limit */
 
     int fd = open(FIB_DEV, O_RDWR);
@@ -25,8 +26,12 @@ int main(int argc, char *argv[])
                 clock_gettime(CLOCK_MONOTONIC, &t1);
                 sz = write(fd, write_buf, atoi(argv[1]));
                 clock_gettime(CLOCK_MONOTONIC, &t2);
-                printf("%d %lld %ld %lld\n", i, sz, t2.tv_nsec - t1.tv_nsec,
-                       t2.tv_nsec - t1.tv_nsec - sz);
+                long user_time;
+                if ((t2.tv_nsec - t1.tv_nsec) < 0)
+                    user_time = 1000000000 + t2.tv_nsec - t1.tv_nsec;
+                else
+                    user_time = t2.tv_nsec - t1.tv_nsec;
+                printf("%d %lld %ld %lld\n", i, sz, user_time, user_time - sz);
             }
         }
         return 0;
@@ -43,20 +48,22 @@ int main(int argc, char *argv[])
 
     for (int i = 0; i <= offset; i++) {
         lseek(fd, i, SEEK_SET);
-        sz = read(fd, buf, 1);
+        sz = read(fd, buf, BUF_SIZE);
         printf("Reading from " FIB_DEV
                " at offset %d, returned the sequence "
-               "%lld.\n",
-               i, sz);
+               "%s.\n",
+               i, buf);
+        memset(buf, 0, BUF_SIZE);
     }
 
     for (int i = offset; i >= 0; i--) {
         lseek(fd, i, SEEK_SET);
-        sz = read(fd, buf, 1);
+        sz = read(fd, buf, BUF_SIZE);
         printf("Reading from " FIB_DEV
                " at offset %d, returned the sequence "
-               "%lld.\n",
-               i, sz);
+               "%s.\n",
+               i, buf);
+        memset(buf, 0, BUF_SIZE);
     }
 
     close(fd);
