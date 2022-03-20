@@ -51,8 +51,8 @@ int main(int argc, char *argv[])
         sz = read(fd, buf, BUF_SIZE);
         printf("Reading from " FIB_DEV
                " at offset %d, returned the sequence "
-               "%s.\n",
-               i, buf);
+               "%lld.\n",
+               i, sz);
         memset(buf, 0, BUF_SIZE);
     }
 
@@ -61,8 +61,8 @@ int main(int argc, char *argv[])
         sz = read(fd, buf, BUF_SIZE);
         printf("Reading from " FIB_DEV
                " at offset %d, returned the sequence "
-               "%s.\n",
-               i, buf);
+               "%lld.\n",
+               i, sz);
         memset(buf, 0, BUF_SIZE);
     }
 
