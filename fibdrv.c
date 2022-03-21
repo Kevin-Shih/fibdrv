@@ -194,6 +194,50 @@ static long long fib_sequence_bignum2(long long k, char *buf)
     return n;
 }
 
+static char **bigN_add3(char **bigN1, char **bigN2)
+{
+    int i, carry = 0, sum, len1 = strlen(*bigN1), len2 = strlen(*bigN2);
+
+    for (i = 0; i < len2; i++) {
+        sum = (*bigN1)[i] + (*bigN2)[i] + carry - ('0' << 1);
+        (*bigN2)[i] = '0' + sum % 10;
+        carry = sum / 10;
+    }
+
+    for (i = len2; i < len1; i++) {
+        sum = (*bigN1)[i] - '0' + carry;
+        (*bigN2)[i] = '0' + sum % 10;
+        carry = sum / 10;
+    }
+
+    if (carry)
+        (*bigN2)[i] = '0' + carry;
+    return bigN2;
+}
+
+// v5 bigN3 iterative
+static long long fib_sequence_bignum3(long long k, char *buf)
+{
+    if (k < 2) {
+        char result[2];
+        snprintf(result, 2, "%lld", k);
+        long long n = copy_to_user(buf, result, 2);
+        return n;
+    }
+    char *buf1 = (char *) kmalloc(1024, GFP_KERNEL),
+         *buf2 = (char *) kmalloc(1024, GFP_KERNEL);
+    char **fk1 = &buf1, **fk2 = &buf2, **temp;
+    buf1[0] = '1', buf2[0] = '1';  // k = 2, k = 1
+    for (int i = 3; i <= k; i++) {
+        temp = bigN_add3(fk1, fk2);
+        fk2 = fk1;
+        fk1 = temp;
+    }
+    strrev(*fk1);
+    long long n = copy_to_user(buf, *fk1, strlen(*fk1));
+    return n;
+}
+
 // v2
 static long long fib_sequence_fdoubling(long long k)
 {
@@ -272,7 +316,7 @@ static ssize_t fib_read(struct file *file,
                         size_t size,
                         loff_t *offset)
 {
-    return (ssize_t) fib_sequence_bignum2(*offset, buf);
+    return (ssize_t) fib_sequence_bignum3(*offset, buf);
 }
 
 static ktime_t kt;
@@ -309,6 +353,11 @@ static ssize_t fib_write(struct file *file,
     case 4:  // bignum2 iterative (time measure)
         kt = ktime_get();
         fib_sequence_bignum2(*offset, NULL);
+        kt = ktime_sub(ktime_get(), kt);
+        return (ssize_t) ktime_to_ns(kt);
+    case 5:  // bignum3 iterative (time measure)
+        kt = ktime_get();
+        fib_sequence_bignum3(*offset, NULL);
         kt = ktime_sub(ktime_get(), kt);
         return (ssize_t) ktime_to_ns(kt);
     default:  // make check
