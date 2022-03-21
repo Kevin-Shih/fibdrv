@@ -22,7 +22,7 @@ MODULE_VERSION("0.1");
 /* MAX_LENGTH is set to 92 because
  * ssize_t can't fit the number > 92
  */
-#define MAX_LENGTH 92
+#define MAX_LENGTH 4896
 
 static dev_t fib_dev = 0;
 static struct cdev *fib_cdev;
@@ -136,6 +136,64 @@ static long long fib_sequence_bignum(long long k, char *buf)
     return n;
 }
 
+static void bigN_add2(char *bigN1, char *bigN2, char *buf)
+{
+    int i, carry = 0, sum, len1 = strlen(bigN1), len2 = strlen(bigN2);
+
+    for (i = 0; i < len2; i++) {
+        sum = bigN1[i] + bigN2[i] + carry - ('0' << 1);
+        buf[i] = '0' + sum % 10;
+        carry = sum / 10;
+    }
+
+    for (i = len2; i < len1; i++) {
+        sum = bigN1[i] - '0' + carry;
+        buf[i] = '0' + sum % 10;
+        carry = sum / 10;
+    }
+
+    if (carry)
+        buf[i] = '0' + carry;
+}
+
+static void strrev(char *str)
+{
+    int i = strlen(str) - 1, j = 0;
+
+    while (i > j) {
+        char ch;
+        ch = str[i];
+        str[i] = str[j];
+        str[j] = ch;
+        i--;
+        j++;
+    }
+}
+
+// v4 bigN2 iterative
+static long long fib_sequence_bignum2(long long k, char *buf)
+{
+    if (k < 2) {
+        char result[2];
+        snprintf(result, 2, "%lld", k);
+        long long n = copy_to_user(buf, result, 2);
+        return n;
+    }
+
+    char *fk1 = (char *) kmalloc(1024, GFP_KERNEL),
+         *fk2 = (char *) kmalloc(1024, GFP_KERNEL),
+         *temp = (char *) kmalloc(1024, GFP_KERNEL);
+    fk1[0] = '1', fk2[0] = '1';  // k = 2, k = 1
+    for (int i = 3; i <= k; i++) {
+        bigN_add2(fk1, fk2, temp);
+        strncpy(fk2, fk1, strlen(fk1));
+        strncpy(fk1, temp, strlen(temp));
+    }
+    strrev(fk1);
+    long long n = copy_to_user(buf, fk1, strlen(fk1));
+    return n;
+}
+
 // v2
 static long long fib_sequence_fdoubling(long long k)
 {
@@ -214,7 +272,7 @@ static ssize_t fib_read(struct file *file,
                         size_t size,
                         loff_t *offset)
 {
-    return (ssize_t) fib_sequence_fdoubling(*offset);
+    return (ssize_t) fib_sequence_bignum2(*offset, buf);
 }
 
 static ktime_t kt;
@@ -243,9 +301,14 @@ static ssize_t fib_write(struct file *file,
         fib_sequence_fdoubling(*offset);
         kt = ktime_sub(ktime_get(), kt);
         return (ssize_t) ktime_to_ns(kt);
-    case 3:  // fast doubling (time measure)
+    case 3:  // fast doubling2 (time measure)
         kt = ktime_get();
         fib_sequence_fdoubling2(*offset);
+        kt = ktime_sub(ktime_get(), kt);
+        return (ssize_t) ktime_to_ns(kt);
+    case 4:  // bignum2 iterative (time measure)
+        kt = ktime_get();
+        fib_sequence_bignum2(*offset, NULL);
         kt = ktime_sub(ktime_get(), kt);
         return (ssize_t) ktime_to_ns(kt);
     default:  // make check
